@@ -1,0 +1,3 @@
+imaplib2
+beautifulsoup4
+lxml
