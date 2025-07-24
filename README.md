@@ -62,7 +62,7 @@ CACHE_JSON = "cache/emails.json"
 Run the scraper:
 
 ```bash
-python scraper.py
+python script.py
 ```
 
 This will:
