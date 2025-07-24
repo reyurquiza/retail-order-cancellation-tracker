@@ -14,7 +14,7 @@ Results are saved to a CSV file and all emails (with or without data) are cached
 ## 🚀 Features
 
 - 🔒 Secure IMAP login using Gmail app password  
-- ⏱ Only scans emails from the past N days  
+- ⏱ Only scans emails from the past X days  
 - 📨 Caches processed emails to avoid re-checking  
 - 📁 Outputs clean CSV reports  
 - 📬 Extracts from HTML emails using BeautifulSoup
@@ -26,8 +26,8 @@ Results are saved to a CSV file and all emails (with or without data) are cached
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/target-email-scraper.git
-cd target-email-scraper
+git clone https://github.com/zzpixels/targetemailscraper.git
+cd targetemailscraper
 ```
 
 ### 2. Install dependencies
@@ -42,7 +42,7 @@ pip install -r requirements.txt
 
 ### 3. Create `config.py`
 
-Make a new file in the project root called `config.py`:
+Make a new file in the project root called `config.py`: (Or use the one provided)
 
 ```python
 EMAIL = "your_email@gmail.com"
