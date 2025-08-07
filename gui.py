@@ -11,7 +11,7 @@ import queue
 
 # Import your existing modules
 try:
-    from targetCancelFinder import scrape_target_emails
+    from scraperModule import scrape_target_emails
     from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON
 except ImportError as e:
     messagebox.showerror("Import Error", f"Could not import required modules: {e}")
@@ -143,19 +143,19 @@ class TargetScraperGUI:
         ttk.Entry(settings_frame, textvariable=self.days_back_var, width=10).grid(row=0, column=1, sticky='w', padx=10)
 
         # Output Paths
-        ttk.Label(settings_frame, text="CSV Output Path:").grid(row=1, column=0, sticky='w', pady=5)
+        #ttk.Label(settings_frame, text="CSV Output Path:").grid(row=1, column=0, sticky='w', pady=5)
         self.csv_path_var = tk.StringVar()
         csv_frame = ttk.Frame(settings_frame)
         csv_frame.grid(row=1, column=1, sticky='ew', padx=10)
-        ttk.Entry(csv_frame, textvariable=self.csv_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(csv_frame, text="Browse", command=self.browse_csv_path).pack(side=tk.RIGHT, padx=(5, 0))
+        #ttk.Entry(csv_frame, textvariable=self.csv_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        #ttk.Button(csv_frame, text="Browse", command=self.browse_csv_path).pack(side=tk.RIGHT, padx=(5, 0))
 
-        ttk.Label(settings_frame, text="Cache JSON Path:").grid(row=2, column=0, sticky='w', pady=5)
+        #ttk.Label(settings_frame, text="Cache JSON Path:").grid(row=2, column=0, sticky='w', pady=5)
         self.cache_path_var = tk.StringVar()
         cache_frame = ttk.Frame(settings_frame)
         cache_frame.grid(row=2, column=1, sticky='ew', padx=10)
-        ttk.Entry(cache_frame, textvariable=self.cache_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(cache_frame, text="Browse", command=self.browse_cache_path).pack(side=tk.RIGHT, padx=(5, 0))
+        #ttk.Entry(cache_frame, textvariable=self.cache_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        #ttk.Button(cache_frame, text="Browse", command=self.browse_cache_path).pack(side=tk.RIGHT, padx=(5, 0))
 
         settings_frame.columnconfigure(1, weight=1)
 
