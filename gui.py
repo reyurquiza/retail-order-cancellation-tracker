@@ -6,23 +6,17 @@ import json
 import csv
 from datetime import datetime
 import sys
-from io import StringIO
 import queue
-
-# Import your existing modules
-try:
-    from scraperModule import scrape_target_emails
-    from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON
-except ImportError as e:
-    messagebox.showerror("Import Error", f"Could not import required modules: {e}")
-    sys.exit(1)
+from scraperModule import scrape_target_emails
+from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON
 
 def smart_trim(text, limit=90):
     if len(text) <= limit:
         return text
-
-    trimmed = text[:limit].rsplit(" ", 1)[0]  # Cut to limit and backtrack to last full word
+    """Cut to limit and backtrack to last full word"""
+    trimmed = text[:limit].rsplit(" ", 1)[0]
     return trimmed + "...\n"
+
 
 class RealTimeLogger:
     """Custom logger that sends output to GUI in real-time"""
@@ -38,7 +32,8 @@ class RealTimeLogger:
         self.original_stdout.flush()
 
         # Send to GUI queue
-        if message.strip():  # Only send non-empty messages
+        if message.strip():
+            # Only send non-empty messages
             self.gui_log_queue.put(message.strip())
 
     def flush(self):
@@ -49,12 +44,11 @@ class TargetScraperGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Target Email Scraper")
-        self.root.geometry("900x700")
-        self.root.minsize(800, 600)
+        self.root.geometry("1000x700")
+        self.root.minsize(900, 600)
 
         # Configure style
         self.style = ttk.Style()
-        self.style.theme_use('clam')
         self.style.theme_use('clam')
 
         # Create queue for real-time logging
@@ -74,10 +68,10 @@ class TargetScraperGUI:
                     message = self.log_queue.get_nowait()
                     timestamp = datetime.now().strftime("%H:%M:%S")
                     log_message = f"[{timestamp}] {message}\n"
-                    self._append_log(smart_trim(log_message, limit=90))
+                    self._append_log(smart_trim(log_message, limit=120))
                 except queue.Empty:
                     break
-        except Exception as e:
+        except Exception:
             pass  # Ignore errors in logging
 
         # Schedule next check
@@ -102,6 +96,8 @@ class TargetScraperGUI:
         self.results_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.results_frame, text="View Results")
         self.setup_results_tab()
+
+        # TODO: Implement Tab 4: Options
 
     def setup_config_tab(self):
         # Main container with scrollbar
@@ -142,20 +138,13 @@ class TargetScraperGUI:
         self.days_back_var = tk.StringVar()
         ttk.Entry(settings_frame, textvariable=self.days_back_var, width=10).grid(row=0, column=1, sticky='w', padx=10)
 
-        # Output Paths
-        #ttk.Label(settings_frame, text="CSV Output Path:").grid(row=1, column=0, sticky='w', pady=5)
-        self.csv_path_var = tk.StringVar()
-        csv_frame = ttk.Frame(settings_frame)
-        csv_frame.grid(row=1, column=1, sticky='ew', padx=10)
-        #ttk.Entry(csv_frame, textvariable=self.csv_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        #ttk.Button(csv_frame, text="Browse", command=self.browse_csv_path).pack(side=tk.RIGHT, padx=(5, 0))
-
-        #ttk.Label(settings_frame, text="Cache JSON Path:").grid(row=2, column=0, sticky='w', pady=5)
-        self.cache_path_var = tk.StringVar()
-        cache_frame = ttk.Frame(settings_frame)
-        cache_frame.grid(row=2, column=1, sticky='ew', padx=10)
-        #ttk.Entry(cache_frame, textvariable=self.cache_path_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        #ttk.Button(cache_frame, text="Browse", command=self.browse_cache_path).pack(side=tk.RIGHT, padx=(5, 0))
+        # Output Folder (single setting that controls CSV and cache locations)
+        ttk.Label(settings_frame, text="Output folder:").grid(row=1, column=0, sticky='w', pady=5)
+        self.output_dir_var = tk.StringVar()
+        output_frame = ttk.Frame(settings_frame)
+        output_frame.grid(row=1, column=1, sticky='ew', padx=10)
+        ttk.Entry(output_frame, textvariable=self.output_dir_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(output_frame, text="Browse", command=self.browse_output_folder).pack(side=tk.RIGHT, padx=(5, 0))
 
         settings_frame.columnconfigure(1, weight=1)
 
@@ -211,7 +200,7 @@ class TargetScraperGUI:
         files_frame = ttk.LabelFrame(self.results_frame, text="Output Files", padding=10)
         files_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
-        ttk.Button(files_frame, text="Open Output Directory", command=self.open_orders_csv).pack(side=tk.LEFT,
+        ttk.Button(files_frame, text="Open Output Folder", command=self.open_orders_csv).pack(side=tk.LEFT,
                                                                                                  padx=(0, 10))
         ttk.Button(files_frame, text="Refresh Results", command=self.refresh_results).pack(side=tk.RIGHT)
 
@@ -219,8 +208,8 @@ class TargetScraperGUI:
         table_frame = ttk.LabelFrame(self.results_frame, text="Recent Orders", padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
-        # Create treeview for results
-        columns = ("Order #", "Status", "Date", "Email")
+        # Create treeview for results (added Tracking column)
+        columns = ("Order #", "Status", "Date", "Email", "Tracking")
         self.results_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=15,
                                          selectmode='extended')
 
@@ -232,7 +221,13 @@ class TargetScraperGUI:
 
         for col in columns:
             self.results_tree.heading(col, text=col, command=lambda c=col: self.sort_treeview(c))
-            self.results_tree.column(col, width=150)
+            # Give tracking column a bit more width
+            if col == "Tracking":
+                self.results_tree.column(col, width=250)
+            elif col == "Email":
+                self.results_tree.column(col, width=220)
+            else:
+                self.results_tree.column(col, width=120)
             self.sort_reverse[col] = False
             self.sort_states[col] = 0  # Start unsorted
 
@@ -306,30 +301,23 @@ class TargetScraperGUI:
         for i, entry in enumerate(self.account_entries):
             entry['frame'].configure(text=f"Account {i + 1}")
 
-    def browse_csv_path(self):
-        filename = filedialog.asksaveasfilename(
-            title="Select CSV output file",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            defaultextension=".csv"
-        )
-        if filename:
-            self.csv_path_var.set(filename)
-
-    def browse_cache_path(self):
-        filename = filedialog.asksaveasfilename(
-            title="Select cache JSON file",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            defaultextension=".json"
-        )
-        if filename:
-            self.cache_path_var.set(filename)
+    def browse_output_folder(self):
+        folder = filedialog.askdirectory(title="Select output folder")
+        if folder:
+            self.output_dir_var.set(folder)
 
     def load_config(self):
         # Load from existing config
         try:
             self.days_back_var.set(str(DAYS_BACK))
-            self.csv_path_var.set(CSV_PATH)
-            self.cache_path_var.set(CACHE_JSON)
+            # Derive an output folder from CSV_PATH or CACHE_JSON if possible
+            csv_dir = os.path.dirname(CSV_PATH) if CSV_PATH else ""
+            cache_dir = os.path.dirname(CACHE_JSON) if CACHE_JSON else ""
+            # Prefer CSV directory if it looks like a folder (non-empty)
+            output_dir = csv_dir or cache_dir or ""
+            if output_dir == "":
+                output_dir = os.getcwd()
+            self.output_dir_var.set(output_dir)
 
             # Load email accounts
             for account in EMAIL_ACCOUNTS:
@@ -354,13 +342,20 @@ class TargetScraperGUI:
                         'imap_server': entry['imap_server'].get().strip()
                     })
 
+            output_dir = self.output_dir_var.get().strip() or "output"
+            # Make sure folder exists
+            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(os.path.join(output_dir, "cache"), exist_ok=True)
+
             # Create config content
+            # We save OUTPUT_DIR and derive CSV_PATH and CACHE_JSON from it so the backend gets expected names
             config_content = f'''# Multiple email accounts
 EMAIL_ACCOUNTS = {json.dumps(accounts, indent=4)}
 
 DAYS_BACK = {self.days_back_var.get() or "7"}
-CSV_PATH = "{self.csv_path_var.get()}"
-CACHE_JSON = "{self.cache_path_var.get()}"
+OUTPUT_DIR = "{output_dir}"
+CSV_PATH = OUTPUT_DIR + "/report.csv"
+CACHE_JSON = OUTPUT_DIR + "/cache/emails.json"
 '''
 
             # Write to config.py
@@ -396,7 +391,7 @@ CACHE_JSON = "{self.cache_path_var.get()}"
         self.progress_bar.start(10)
 
         # Clear log
-        self.clear_log()
+        # self.clear_log()
 
         # Start scraping in separate thread
         self.scraping_thread = threading.Thread(target=self.run_scraping, daemon=True)
@@ -522,7 +517,8 @@ CACHE_JSON = "{self.cache_path_var.get()}"
     def check_tracking_numbers(self, selected_items):
         """Check if selected items have tracking numbers"""
         try:
-            orders_csv = self.csv_path_var.get().replace('.csv', '_orders.csv')
+            output_dir = self.output_dir_var.get().strip() or os.getcwd()
+            orders_csv = os.path.join(output_dir, "report_orders.csv")
 
             if not os.path.exists(orders_csv):
                 return False
@@ -579,7 +575,8 @@ CACHE_JSON = "{self.cache_path_var.get()}"
             if not selected_items:
                 return
 
-            orders_csv = self.csv_path_var.get().replace('.csv', '_orders.csv')
+            output_dir = self.output_dir_var.get().strip() or os.getcwd()
+            orders_csv = os.path.join(output_dir, "report_orders.csv")
 
             if not os.path.exists(orders_csv):
                 messagebox.showwarning("Warning", "Orders CSV file not found.")
@@ -679,7 +676,7 @@ CACHE_JSON = "{self.cache_path_var.get()}"
 
                     items.sort(key=lambda x: parse_date(x[0]), reverse=reverse_sort)
                 else:
-                    # Sort alphabetically for Status and Email
+                    # Sort alphabetically for Status, Email and Tracking
                     items.sort(key=lambda x: x[0].lower(), reverse=reverse_sort)
 
                 # Rearrange items in sorted positions
@@ -728,8 +725,9 @@ CACHE_JSON = "{self.cache_path_var.get()}"
                 self.results_tree.heading(col, text=col)
 
             # Read and display results
-            orders_csv = self.csv_path_var.get().replace('.csv', '_orders.csv')
-            cancellations_csv = self.csv_path_var.get().replace('.csv', '_cancellations.csv')
+            output_dir = self.output_dir_var.get().strip() or os.getcwd()
+            orders_csv = os.path.join(output_dir, "report_orders.csv")
+            cancellations_csv = os.path.join(output_dir, "report_cancellations.csv")
 
             total_orders = 0
             total_cancellations = 0
@@ -750,7 +748,8 @@ CACHE_JSON = "{self.cache_path_var.get()}"
                                 order_num,
                                 row.get('status', '').upper(),
                                 row.get('sent_date', ''),
-                                row.get('sent_to', '')
+                                row.get('sent_to', ''),
+                                row.get('tracking_numbers', '')
                             ))
                             # Store original order for unsorted state
                             self.original_order.append(order_num)
@@ -773,7 +772,8 @@ CACHE_JSON = "{self.cache_path_var.get()}"
                                 order_num,
                                 'CANCELLED',
                                 row.get('sent_date', ''),
-                                row.get('sent_to', '')
+                                row.get('sent_to', ''),
+                                ''  # cancellations don't have tracking in this table
                             ))
                             # Store original order for unsorted state
                             self.original_order.append(order_num)
@@ -810,8 +810,7 @@ Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             messagebox.showerror("Error", error_msg)
 
     def open_orders_csv(self):
-        orders_csv = self.csv_path_var.get().replace('.csv', '_orders.csv')
-        output_dir = os.path.dirname(orders_csv)
+        output_dir = self.output_dir_var.get().strip() or os.getcwd()
 
         # Create directory if it doesn't exist
         if not os.path.exists(output_dir):
