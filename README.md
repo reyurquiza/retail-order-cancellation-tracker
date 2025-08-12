@@ -31,14 +31,34 @@ A powerful Python application that connects to your email accounts and extracts 
 
 ## Installation
 
+### Option 1: Download Pre-built Executable (Recommended for End Users)
+
+1. **Download the latest release:**
+   - Go to the [Releases](https://github.com/your-username/target-email-scraper/releases) page
+   - Download `TargetEmailScraper.exe` from the latest release
+   - No Python installation required!
+
+2. **Run the application:**
+   - Double-click `TargetEmailScraper.exe` to launch
+   - Windows may show a security warning - click "More info" → "Run anyway"
+
+### Option 2: Run from Source Code (For Developers)
+
 1. **Clone or download the repository**
 2. **Install required dependencies:**
    ```bash
    pip install beautifulsoup4 lxml
    ```
 3. **Ensure you have Python 3.8+ installed**
+4. **Run with:** `python gui.py`
 
 ## Quick Start
+
+### Using the Pre-built Executable (Easiest)
+
+1. **Download and run `TargetEmailScraper.exe`**
+2. **Configure your email accounts** (see Configuration section below)
+3. **Start scraping and view results**
 
 ### Using the GUI (Recommended)
 
