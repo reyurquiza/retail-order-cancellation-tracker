@@ -27,17 +27,70 @@ from email.utils import parsedate_to_datetime
 from collections import defaultdict
 from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON
 
+# -----------------------
+# Retailer rules (data-driven)
+# -----------------------
+RETAILER_RULES = {
+    "target": {
+        "ids": ["target", "target.com", "orders@target", "order@target"],
+        "order_patterns": [
+            r"order\s*#?\s*(\d{8,15})",
+            r"order\s*number[:\s]*(\d{8,15})",
+            r"#(\d{8,15})"
+        ],
+        "cancel_indicators": ["cancel", "canceled", "cancelled", "sorry, we had to cancel"],
+        "shipped_indicators": ["shipped", "your item is on the way", "your package"],
+        "delivered_indicators": ["delivered", "out for delivery", "arrived", "left at the", "was delivered"],
+    },
+    "walmart": {
+        "ids": ["walmart", "walmart.com"],
+        "order_patterns": [
+            r"\b\d{6,10}-\d{6,12}\b",
+            r"order\s*number[:\s#]*([\d-]{10,25})",
+            r"order\s*#?\s*([\d-]{10,25})"
+        ],
+        "cancel_indicators": ["canceled", "cancelled", "canceled:"],
+        "shipped_indicators": ["shipped", "your package shipped"],
+        "delivered_indicators": ["arrived", "your package arrived", "delivered"],
+        "tracking_patterns": [r"\b1Z[0-9A-Z]{16}\b", r"\b(\d{12,22})\b"]
+    },
+    "amazon": {
+        "ids": ["amazon", "amazon.com"],
+        "order_patterns": [
+            r"\b(\d{3}-\d{7}-\d{7})\b",
+            r"order\s*#?\s*(\d{3}-\d{7}-\d{7})"
+        ],
+        "cancel_indicators": ["canceled", "cancelled", "order canceled", "order cancelled"],
+        "shipped_indicators": ["shipped", "out for delivery", "your package is on the way"],
+        "delivered_indicators": ["delivered", "has been delivered", "arrived"],
+    },
+    "bestbuy": {
+        "ids": ["bestbuy", "best buy"],
+        "order_patterns": [
+            r"order\s*#?\s*(\d{6,15})",
+            r"order\s*number[:\s]*(\d{6,15})"
+        ],
+        "cancel_indicators": ["canceled", "cancelled"],
+        "shipped_indicators": ["shipped"],
+        "delivered_indicators": ["delivered", "arrived"],
+    }
+}
+
+GLOBAL_TRACKING_PATTERNS = [
+    r"\b(1Z[0-9A-Z]{16})\b",            # UPS
+    r"\b(\d{12,22})\b",                 # FedEx / long numeric
+    r"\b(\d{20,22}|\d{13})\b"           # USPS / variations
+]
+
 
 # -----------------------
-# Helpers / I/O
+# Helpers / I/O / Logging
 # -----------------------
 def log(msg):
-    """Console logging helper (captured by GUI's RealTimeLogger)."""
     print(f"[LOG] {msg}")
 
 
 def load_email_cache(filename):
-    """Load cache from the given filename, return list (empty if none)."""
     if not filename:
         log("No cache filename provided to load_email_cache()")
         return []
@@ -55,7 +108,6 @@ def load_email_cache(filename):
 
 
 def save_email_cache(cache_data, filename):
-    """Save cache_data to the given filename (creates directories as needed)."""
     if not filename:
         log("No cache filename provided to save_email_cache()")
         return
@@ -69,33 +121,27 @@ def save_email_cache(cache_data, filename):
 
 
 def write_to_csv(row, csv_file):
-    """
-    Append a row dict to csv_file. Creates parent dir and headers if needed.
-    Chooses schema based on filename suffix ('_orders.csv' uses the order schema).
-    """
     if not csv_file:
         raise ValueError("csv_file path required")
     os.makedirs(os.path.dirname(csv_file), exist_ok=True)
     file_needs_header = not os.path.isfile(csv_file) or os.stat(csv_file).st_size == 0
-    mode = "a"
-    with open(csv_file, mode, newline="", encoding="utf-8") as f:
-        if csv_file.endswith("_orders.csv"):
-            fieldnames = ["order_number", "tracking_numbers", "ship_to", "sent_to", "sent_date", "status"]
+    with open(csv_file, "a", newline="", encoding="utf-8") as f:
+        if csv_file.endswith("_orders.csv") or csv_file.endswith("report_orders.csv"):
+            fieldnames = ["order_number", "tracking_numbers", "ship_to", "sent_to", "sent_date", "status", "retailer"]
         else:
-            fieldnames = ["order_number", "sent_to", "sent_date", "reason"]
+            fieldnames = ["order_number", "sent_to", "sent_date", "reason", "retailer"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if file_needs_header:
             writer.writeheader()
             log(f"Wrote header to {csv_file}")
         writer.writerow(row)
-        log(f"Wrote row to {csv_file}: {row.get('order_number')}")
+        log(f"Wrote row to {csv_file}: {row.get('order_number')} ({row.get('retailer')})")
 
 
 # -----------------------
 # Parsing helpers
 # -----------------------
 def clean_subject(subject):
-    """Decode email subject (handles encoded parts)."""
     decoded_parts = decode_header(subject)
     subject_str = ""
     for part, encoding in decoded_parts:
@@ -109,99 +155,105 @@ def clean_subject(subject):
     return subject_str
 
 
-def is_cancellation_email(subject, text):
-    """Return True if subject/body indicate a cancellation notice."""
-    s = (subject or "").lower()
-    t = (text or "").lower()
-    checks = [
-        "sorry, we had to cancel" in s,
-        "cancel order" in s,
-        "canceled" in s,
-        "cancelled" in s,
-        "your order has been canceled" in t,
-        "your order has been cancelled" in t,
-        "order was canceled" in t,
-        "order was cancelled" in t,
-        "we had to cancel" in t,
-        "purchase limit exceeded" in t,
-        "payment issue" in t,
-        "activity not supported" in t,
-        "you haven't been charged" in t,
-        "system automatically canceled" in t,
-    ]
-    return any(checks)
+def identify_retailer(sender, subject):
+    """
+    Identify retailer from sender or subject text (case-insensitive).
+    """
+    s = (sender or "").lower()
+    subj = (subject or "").lower()
+    for rname, rules in RETAILER_RULES.items():
+        for ident in rules.get("ids", []):
+            if ident in s or ident in subj:
+                log(f"Identified retailer '{rname}' from sender/subject (ident='{ident}')")
+                return rname
+    return None
+
+
+def find_order_number_with_patterns(text, patterns):
+    for pat in patterns:
+        m = re.search(pat, text or "", re.IGNORECASE)
+        if m:
+            # if capturing groups present return first group else full match
+            return m.group(1) if m.groups() else m.group(0)
+    return None
 
 
 def extract_order_details(text, subject):
     """
-    Parse plain-text email content and subject to extract:
-      - order_number (8-15 digits expected)
-      - tracking_numbers (FedEx/UPS/USPS heuristics)
-      - ship_to (address if present)
-      - is_cancellation (bool)
-      - cancellation_reason (if cancellation)
+    Extract order info using retailer-specific rules. Includes a robust fallback
+    for Target: if no explicit pattern matched, try a general 8-15 digit search.
     """
-    order_patterns = [
-        r"order\s*#?\s*(\d{8,15})",
-        r"order\s*number[:\s]*(\d{8,15})",
-        r"#(\d{8,15})",
-    ]
+    # Retailer detection: check sender-like strings in the text and subject
+    retailer = identify_retailer(text, subject) or identify_retailer(subject, text)
 
-    order_number = None
-    for pattern in order_patterns:
-        m = re.search(pattern, text or "", re.IGNORECASE) or re.search(pattern, subject or "", re.IGNORECASE)
+    # Default to 'target' if nothing matched (keeps backward compatibility)
+    if retailer is None:
+        retailer = "target"
+
+    rules = RETAILER_RULES.get(retailer, RETAILER_RULES["target"])
+
+    # attempt order number detection with retailer patterns (body then subject)
+    order_number = find_order_number_with_patterns(text, rules.get("order_patterns", []))
+    if not order_number:
+        order_number = find_order_number_with_patterns(subject, rules.get("order_patterns", []))
+
+    # --- TARGET fallback: look for any 8-15 digit sequence if usual patterns missed ---
+    if retailer == "target" and not order_number:
+        # If the rules didn't find it, be more flexible: any 8-15 digit sequence is likely a Target order #
+        m = re.search(r"\b(\d{8,15})\b", text or "") or re.search(r"\b(\d{8,15})\b", subject or "")
         if m:
             order_number = m.group(1)
+            log(f"Target fallback matched order number {order_number}")
+
+    # Tracking detection
+    tracking_numbers = []
+    tracking_patterns = rules.get("tracking_patterns") or GLOBAL_TRACKING_PATTERNS
+    for tpat in tracking_patterns:
+        found = re.findall(tpat, text or "")
+        if found:
+            flat = []
+            for f in found:
+                if isinstance(f, tuple):
+                    flat.append(next((x for x in f if x), ""))
+                else:
+                    flat.append(f)
+            tracking_numbers.extend(flat)
+    tracking_numbers = list({t for t in tracking_numbers if t and t != order_number})
+
+    # Ship_to extraction (simple)
+    address_match = re.search(r'Delivers to:\s*(.+,\s*\d{5})', text or "", re.IGNORECASE)
+    ship_to = address_match.group(1).strip() if address_match else None
+
+    # Cancellation detection
+    is_cancel = False
+    for kw in rules.get("cancel_indicators", []):
+        if kw in (subject or "").lower() or kw in (text or "").lower():
+            is_cancel = True
             break
 
-    cancellation_flag = is_cancellation_email(subject or "", text or "")
-
-    tracking_numbers = []
-    if not cancellation_flag:
-        fedex = re.findall(r"\b(\d{12,22})\b", text or "")
-        ups = re.findall(r"\b(1Z[0-9A-Z]{16})\b", text or "")
-        usps = re.findall(r"\b(\d{20,22}|\d{13})\b", text or "")
-        tracking_numbers = list(set(fedex + ups + usps))
-        if order_number in tracking_numbers:
-            tracking_numbers.remove(order_number)
-
-    ship_to = None
-    m_addr = re.search(r"Delivers to:\s*(.+,\s*\d{5})", text or "", re.IGNORECASE)
-    if m_addr:
-        ship_to = m_addr.group(1).strip()
-
     cancellation_reason = None
-    if cancellation_flag:
-        t = (text or "").lower()
-        if "purchase limit exceeded" in t:
-            cancellation_reason = "Purchase limit exceeded"
-        elif "payment issue" in t:
-            cancellation_reason = "Payment issue"
-        elif "activity not supported" in t:
-            cancellation_reason = "Activity not supported on Target.com"
-        elif "out of stock" in t:
-            cancellation_reason = "Out of stock"
-        else:
-            reason_patterns = [
-                r"what went wrong\?\s*(.+?)(?:\*\*|$)",
-                r"reason[:\s]*([^.\n]+)",
-                r"because[:\s]*([^.\n]+)",
-                r"unfortunately[:\s]*([^.\n]+)",
-            ]
-            for pat in reason_patterns:
-                mm = re.search(pat, text or "", re.IGNORECASE | re.DOTALL)
-                if mm:
-                    cancellation_reason = mm.group(1).strip()[:200]
-                    break
-            if not cancellation_reason:
-                cancellation_reason = "Reason not specified"
+    if is_cancel:
+        reason_patterns = [
+            r'what went wrong\?\s*(.+?)(?:\*\*|$)',
+            r'reason[:\s]*([^.\n]+)',
+            r'because[:\s]*([^.\n]+)',
+            r'unfortunately[:\s]*([^.\n]+)',
+        ]
+        for pat in reason_patterns:
+            rm = re.search(pat, text or "", re.IGNORECASE | re.DOTALL)
+            if rm:
+                cancellation_reason = rm.group(1).strip()[:200]
+                break
+        if not cancellation_reason:
+            cancellation_reason = "Reason not specified"
 
     return {
         "order_number": order_number,
         "tracking_numbers": tracking_numbers,
         "ship_to": ship_to,
-        "is_cancellation": cancellation_flag,
+        "is_cancellation": is_cancel,
         "cancellation_reason": cancellation_reason,
+        "retailer": retailer
     }
 
 
@@ -209,11 +261,6 @@ def extract_order_details(text, subject):
 # CSV utilities & status logic
 # -----------------------
 def load_existing_orders_csv(csv_file):
-    """
-    Load orders CSV entirely into a list of dicts and return (rows_list, index_map).
-    index_map maps order_number -> row_dict (the same object from rows_list).
-    If file missing, returns ([], {}).
-    """
     rows = []
     index = {}
     if not csv_file or not os.path.exists(csv_file):
@@ -233,11 +280,10 @@ def load_existing_orders_csv(csv_file):
 
 
 def rewrite_orders_csv(rows, csv_file):
-    """Overwrite the orders csv with provided rows. Field order preserved."""
     if not csv_file:
         raise ValueError("csv_file required")
     os.makedirs(os.path.dirname(csv_file), exist_ok=True)
-    fieldnames = ["order_number", "tracking_numbers", "ship_to", "sent_to", "sent_date", "status"]
+    fieldnames = ["order_number", "tracking_numbers", "ship_to", "sent_to", "sent_date", "status", "retailer"]
     try:
         with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -251,7 +297,6 @@ def rewrite_orders_csv(rows, csv_file):
 
 
 def load_existing_csv_orders(csv_file):
-    """Return set of order_number values already present in csv_file (empty if missing)."""
     existing = set()
     if not csv_file or not os.path.exists(csv_file):
         return existing
@@ -267,42 +312,38 @@ def load_existing_csv_orders(csv_file):
     return existing
 
 
-def detect_highest_status_for_order(order_entry_list):
-    """
-    Given all cached email entries for a single order (list of email entries),
-    detect the highest status observed:
-      - 'cancelled' if any email is cancellation
-      - 'delivered' if any email contains delivered/out-for-delivery indicators
-      - 'shipped' if any tracking number appears
-      - else 'ordered'
-    """
-    status = "ordered"
-    delivered_keywords = [
-        "delivered",
-        "out for delivery",
-        "delivery completed",
-        "left at the",
-        "was delivered",
-        "arrived at",
-        "delivered on",
-        "signature required"
-    ]
+def detect_highest_status_for_order(order_entry_list, retailer_hint=None):
+    rank = {"ordered": 1, "shipped": 2, "delivered": 3, "cancelled": 4}
 
-    # Cancellation overrides everything
+    rules = RETAILER_RULES.get(retailer_hint) if retailer_hint else None
+    delivered_keywords = rules.get("delivered_indicators", []) if rules else ["delivered", "out for delivery", "arrived"]
+    shipped_keywords = rules.get("shipped_indicators", []) if rules else ["shipped", "on the way"]
+
+    # cancellation first
     for entry in order_entry_list:
-        extracted = entry.get("extracted", {}) or {}
-        if extracted.get("is_cancellation"):
+        ex = entry.get("extracted", {}) or {}
+        if ex.get("is_cancellation"):
             return "cancelled"
-    # Delivered detection
+
+    # delivered detection
     for entry in order_entry_list:
         html = (entry.get("html") or "").lower()
-        if any(kw in html for kw in delivered_keywords):
-            return "delivered"
-    # Shipped detection
+        text = (BeautifulSoup(html, "lxml").get_text(separator="\n") if html else "").lower()
+        for kw in delivered_keywords:
+            if kw in html or kw in text:
+                return "delivered"
+
+    # shipped detection
     for entry in order_entry_list:
-        extracted = entry.get("extracted", {}) or {}
-        if extracted.get("tracking_numbers"):
+        subj = (entry.get("subject") or "").lower()
+        html = (entry.get("html") or "").lower()
+        for kw in shipped_keywords:
+            if kw in subj or kw in html:
+                return "shipped"
+        ex = entry.get("extracted", {}) or {}
+        if ex.get("tracking_numbers"):
             return "shipped"
+
     return "ordered"
 
 
@@ -310,17 +351,6 @@ def detect_highest_status_for_order(order_entry_list):
 # Main processing function (updates and writes)
 # -----------------------
 def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
-    """
-    New behavior:
-    - Group all cached messages by order_number.
-    - For each order:
-        * compute highest status observed from cached messages
-        * if the order exists in orders CSV and observed status is an advancement,
-          update the CSV (and stop further processing for that order).
-        * if cancellation observed and not yet in cancellations CSV -> write to cancellations CSV.
-        * if order is new -> append to orders CSV.
-    - After processing all orders, rewrite the orders CSV to persist updates.
-    """
     grouped = defaultdict(list)
     for entry in all_cache_data:
         extracted = entry.get("extracted", {}) or {}
@@ -329,10 +359,8 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
             grouped[order_num].append(entry)
 
     orders_rows, orders_index = load_existing_orders_csv(orders_csv)
-    existing_orders_set = set(orders_index.keys())
     existing_cancellations = load_existing_csv_orders(cancellations_csv)
 
-    appended_rows = []
     modifications = 0
     cancellations_written = 0
     new_orders_written = 0
@@ -340,10 +368,17 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
     rank = {"ordered": 1, "shipped": 2, "delivered": 3, "cancelled": 4}
 
     for order_num, entries in grouped.items():
-        observed_status = detect_highest_status_for_order(entries)
-        log(f"Order {order_num}: observed status -> {observed_status}")
+        retailer_hint = None
+        for e in entries:
+            ex = e.get("extracted", {}) or {}
+            if ex.get("retailer"):
+                retailer_hint = ex.get("retailer")
+                break
 
-        # Determine latest date (ISO)
+        observed_status = detect_highest_status_for_order(entries, retailer_hint=retailer_hint)
+        log(f"Order {order_num}: observed status -> {observed_status} (retailer={retailer_hint})")
+
+        # latest date
         latest_date = ""
         try:
             dates = [entry.get("date") for entry in entries if entry.get("date")]
@@ -361,10 +396,11 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
         except Exception:
             latest_date = ""
 
-        # Gather contact/tracking info
+        # collect info
         tracking = []
         sent_to = ""
         ship_to = ""
+        retailer_name = retailer_hint or ""
         for e in entries:
             ex = e.get("extracted", {}) or {}
             tracking.extend(ex.get("tracking_numbers", []) or [])
@@ -372,14 +408,14 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
                 sent_to = e.get("to")
             if not ship_to and ex.get("ship_to"):
                 ship_to = ex.get("ship_to")
+            if not retailer_name and ex.get("retailer"):
+                retailer_name = ex.get("retailer")
 
         tracking_str = ", ".join(sorted(set(tracking)))
 
         if order_num in orders_index:
             existing_row = orders_index[order_num]
             current_status = (existing_row.get("status") or "ordered").lower()
-            log(f"Existing order {order_num} current status: {current_status}")
-
             if current_status == "delivered":
                 log(f"Order {order_num} already delivered (terminal). Skipping.")
                 continue
@@ -395,6 +431,8 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
                     existing_row["sent_to"] = sent_to
                 if latest_date:
                     existing_row["sent_date"] = latest_date
+                if retailer_name:
+                    existing_row["retailer"] = retailer_name
 
                 modifications += 1
                 log(f"Updated order {order_num}: {old_status} -> {existing_row['status']}")
@@ -410,13 +448,13 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
                         "order_number": order_num,
                         "sent_to": sent_to,
                         "sent_date": latest_date,
-                        "reason": cancel_reason
+                        "reason": cancel_reason,
+                        "retailer": retailer_name
                     }, cancellations_csv)
                     cancellations_written += 1
                     existing_cancellations.add(order_num)
                     log(f"Wrote cancellation for {order_num} to {cancellations_csv}")
 
-                # Once we've applied an advancement, stop further processing for this order this run
                 continue
             else:
                 log(f"No advancement for order {order_num} ({current_status} >= {observed_status}).")
@@ -435,7 +473,8 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
                         "order_number": order_num,
                         "sent_to": sent_to,
                         "sent_date": latest_date,
-                        "reason": cancel_reason
+                        "reason": cancel_reason,
+                        "retailer": retailer_name
                     }, cancellations_csv)
                     cancellations_written += 1
                     existing_cancellations.add(order_num)
@@ -447,12 +486,13 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
                     "ship_to": ship_to,
                     "sent_to": sent_to,
                     "sent_date": latest_date,
-                    "status": observed_status.upper()
+                    "status": observed_status.upper(),
+                    "retailer": retailer_name
                 }
                 orders_rows.append(new_row)
                 orders_index[order_num] = new_row
                 new_orders_written += 1
-                log(f"Appended new order {order_num} with status {observed_status.upper()}")
+                log(f"Appended new order {order_num} with status {observed_status.upper()} (retailer={retailer_name})")
                 continue
 
     rewrite_orders_csv(orders_rows, orders_csv)
@@ -469,11 +509,6 @@ def process_and_write_orders(all_cache_data, orders_csv, cancellations_csv):
 # Main scraping function
 # -----------------------
 def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None, imap_server=None):
-    """
-    Connect to an IMAP server for a single account, fetch Target emails within the
-    given days_back window, parse and append them to a per-account cache, then
-    process the aggregated cache to update CSVs (including status updates).
-    """
     if not email_account or not password or not imap_server:
         raise ValueError("email_account, password and imap_server are required")
 
@@ -499,16 +534,14 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
         new_cache_entries = []
         target_emails_found = 0
 
-        orders_csv = CSV_PATH.replace(".csv", "_orders.csv")
-        cancellations_csv = CSV_PATH.replace(".csv", "_cancellations.csv")
+        orders_csv = CSV_PATH.replace('.csv', '_orders.csv') if CSV_PATH else os.path.join(os.getcwd(), "report_orders.csv")
+        cancellations_csv = CSV_PATH.replace('.csv', '_cancellations.csv') if CSV_PATH else os.path.join(os.getcwd(), "report_cancellations.csv")
 
-        # Iterate newest -> oldest
         for num in reversed(data[0].split()):
             uid = num.decode()
             if uid in cached_uids:
-                # Inform GUI that we're skipping known UIDs
                 log(f"Skipping UID {uid} (already in cache).")
-                continue  # already processed for this account
+                continue
 
             typ, msg_data = mail.fetch(num, "(RFC822)")
             if typ != "OK" or not msg_data:
@@ -532,15 +565,31 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
                 log(f"UID {uid} from {sent_dt_utc.date()} is older than cutoff {cutoff.date()}, stopping iteration.")
                 break
 
-            # Only process Target sender emails
-            if "target" not in sender:
-                log(f"Skipping UID {uid} - sender not Target: {sender}")
+            # Identify retailer (prefer sender then subject)
+            retailer = identify_retailer(sender, subject) or identify_retailer(subject, sender) or "unknown"
+            if retailer == "unknown":
+                if "target" not in sender and "walmart" not in sender and "amazon" not in sender and "bestbuy" not in sender:
+                    log(f"Skipping UID {uid} - sender not a known retailer: {sender}")
+                    continue
+                else:
+                    # try a simple substring fallback
+                    if "target" in sender:
+                        retailer = "target"
+                    elif "walmart" in sender:
+                        retailer = "walmart"
+                    elif "amazon" in sender:
+                        retailer = "amazon"
+                    elif "bestbuy" in sender or "best buy" in sender:
+                        retailer = "bestbuy"
+
+            if retailer not in RETAILER_RULES:
+                log(f"Retailer '{retailer}' not supported by rules; skipping UID {uid}.")
                 continue
 
             target_emails_found += 1
-            log(f"Processing email #{target_emails_found} (UID {uid}) - Subject: {subject}")
+            log(f"Processing email #{target_emails_found} (UID {uid}) - Retailer: {retailer} - Subject: {subject}")
 
-            # Extract HTML body
+            # Extract body
             body = None
             if msg.is_multipart():
                 for part in msg.walk():
@@ -552,6 +601,14 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
                         except Exception:
                             body = None
                         break
+                if not body:
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/plain" and "attachment" not in (part.get("Content-Disposition") or ""):
+                            try:
+                                body = part.get_payload(decode=True).decode(errors="ignore")
+                            except Exception:
+                                body = None
+                            break
             else:
                 try:
                     body = msg.get_payload(decode=True).decode(errors="ignore")
@@ -559,11 +616,14 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
                     body = None
 
             if not body:
-                log(f"UID {uid} - no HTML body found, skipping.")
+                log(f"UID {uid} - no body found, skipping.")
                 continue
 
-            text = BeautifulSoup(body, "lxml").get_text(separator="\n")
+            soup = BeautifulSoup(body, "lxml")
+            text = soup.get_text(separator="\n")
+
             extracted = extract_order_details(text, subject)
+            extracted.setdefault("retailer", retailer)
 
             cache_entry = {
                 "uid": uid,
@@ -576,20 +636,19 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
             }
 
             new_cache_entries.append(cache_entry)
-            cached_uids.add(uid)  # avoid duplicates within same run
+            cached_uids.add(uid)
 
-            # Inform GUI what we extracted for this email (short summary)
             log(f"UID {uid} added to new cache (order={extracted.get('order_number')}, "
-                f"cancel={extracted.get('is_cancellation')}, tracks={len(extracted.get('tracking_numbers', []))})")
+                f"cancel={extracted.get('is_cancellation')}, tracks={len(extracted.get('tracking_numbers', []))}, retailer={extracted.get('retailer')})")
 
-        # Merge and persist per-account cache
+        # Save merged cache (per-account)
         all_cache_data = email_cache + new_cache_entries
         if new_cache_entries:
             save_email_cache(all_cache_data, cache_path)
         else:
-            log("No new Target messages found; cache unchanged.")
+            log("No new retailer messages found; cache unchanged.")
 
-        # Process and write CSVs using aggregated cache (this now updates statuses)
+        # Process and update CSVs
         process_and_write_orders(all_cache_data, orders_csv, cancellations_csv)
 
         mail.logout()
@@ -597,25 +656,3 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
 
     except Exception as e:
         log(f"Error while scraping {email_account}: {e}")
-
-
-# -----------------------
-# If run directly, iterate accounts from config
-# -----------------------
-if __name__ == "__main__":
-    print(f"🚀 Starting Target email scraping for {len(EMAIL_ACCOUNTS)} account(s)...")
-    for i, account in enumerate(EMAIL_ACCOUNTS, 1):
-        print("\n" + "=" * 70)
-        print(f"Processing account {i}/{len(EMAIL_ACCOUNTS)}: {account.get('email')}")
-        print("=" * 70)
-        try:
-            scrape_target_emails(
-                days_back=DAYS_BACK,
-                email_account=account.get("email"),
-                password=account.get("password"),
-                imap_server=account.get("imap_server"),
-            )
-        except Exception as e:
-            log(f"Error processing {account.get('email')}: {e}")
-            continue
-    print(f"🎉 Finished processing all {len(EMAIL_ACCOUNTS)} accounts!")

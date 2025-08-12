@@ -32,8 +32,7 @@ class RealTimeLogger:
         self.original_stdout.flush()
 
         # Send to GUI queue
-        if message.strip():
-            # Only send non-empty messages
+        if message.strip():  # Only send non-empty messages
             self.gui_log_queue.put(message.strip())
 
     def flush(self):
@@ -44,8 +43,8 @@ class TargetScraperGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Target Email Scraper")
-        self.root.geometry("1000x700")
-        self.root.minsize(900, 600)
+        self.root.geometry("1100x700")
+        self.root.minsize(1000, 600)
 
         # Configure style
         self.style = ttk.Style()
@@ -68,7 +67,7 @@ class TargetScraperGUI:
                     message = self.log_queue.get_nowait()
                     timestamp = datetime.now().strftime("%H:%M:%S")
                     log_message = f"[{timestamp}] {message}\n"
-                    self._append_log(smart_trim(log_message, limit=120))
+                    self._append_log(smart_trim(log_message, limit=140))
                 except queue.Empty:
                     break
         except Exception:
@@ -96,8 +95,6 @@ class TargetScraperGUI:
         self.results_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.results_frame, text="View Results")
         self.setup_results_tab()
-
-        # TODO: Implement Tab 4: Options
 
     def setup_config_tab(self):
         # Main container with scrollbar
@@ -208,8 +205,8 @@ class TargetScraperGUI:
         table_frame = ttk.LabelFrame(self.results_frame, text="Recent Orders", padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
-        # Create treeview for results (added Tracking column)
-        columns = ("Order #", "Status", "Date", "Email", "Tracking")
+        # Create treeview for results (added Retailer and Tracking columns)
+        columns = ("Order #", "Status", "Date", "Email", "Retailer", "Tracking")
         self.results_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=15,
                                          selectmode='extended')
 
@@ -221,9 +218,11 @@ class TargetScraperGUI:
 
         for col in columns:
             self.results_tree.heading(col, text=col, command=lambda c=col: self.sort_treeview(c))
-            # Give tracking column a bit more width
+            # Give tracking and retailer column more width
             if col == "Tracking":
-                self.results_tree.column(col, width=250)
+                self.results_tree.column(col, width=300)
+            elif col == "Retailer":
+                self.results_tree.column(col, width=120)
             elif col == "Email":
                 self.results_tree.column(col, width=220)
             else:
@@ -391,7 +390,7 @@ CACHE_JSON = OUTPUT_DIR + "/cache/emails.json"
         self.progress_bar.start(10)
 
         # Clear log
-        # self.clear_log()
+        self.clear_log()
 
         # Start scraping in separate thread
         self.scraping_thread = threading.Thread(target=self.run_scraping, daemon=True)
@@ -676,7 +675,7 @@ CACHE_JSON = OUTPUT_DIR + "/cache/emails.json"
 
                     items.sort(key=lambda x: parse_date(x[0]), reverse=reverse_sort)
                 else:
-                    # Sort alphabetically for Status, Email and Tracking
+                    # Sort alphabetically for Status, Email, Retailer and Tracking
                     items.sort(key=lambda x: x[0].lower(), reverse=reverse_sort)
 
                 # Rearrange items in sorted positions
@@ -749,6 +748,7 @@ CACHE_JSON = OUTPUT_DIR + "/cache/emails.json"
                                 row.get('status', '').upper(),
                                 row.get('sent_date', ''),
                                 row.get('sent_to', ''),
+                                row.get('retailer', ''),
                                 row.get('tracking_numbers', '')
                             ))
                             # Store original order for unsorted state
@@ -773,7 +773,8 @@ CACHE_JSON = OUTPUT_DIR + "/cache/emails.json"
                                 'CANCELLED',
                                 row.get('sent_date', ''),
                                 row.get('sent_to', ''),
-                                ''  # cancellations don't have tracking in this table
+                                row.get('retailer', ''),
+                                ''  # cancellations don't have tracking in this table (or keep blank)
                             ))
                             # Store original order for unsorted state
                             self.original_order.append(order_num)
