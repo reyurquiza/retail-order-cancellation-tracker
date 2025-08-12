@@ -42,7 +42,7 @@ class RealTimeLogger:
 class TargetScraperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Target Email Scraper")
+        self.root.title("Retail Order Email Scraper")
         self.root.geometry("1100x700")
         self.root.minsize(1000, 600)
 
