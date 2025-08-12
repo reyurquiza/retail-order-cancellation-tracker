@@ -5,7 +5,7 @@ Streamlined backend module for scraping Target order and cancellation emails,
 with verbose logging so the GUI can display every backend action.
 
 Behavior:
-- Connect via IMAP and parse Target emails.
+- Connect via IMAP and parse retail order emails.
 - Maintain a per-account JSON cache to avoid reprocessing.
 - Process cached emails and update the orders CSV (_orders.csv) so that
   order statuses advance in the logical shipping order: ordered -> shipped -> delivered.
