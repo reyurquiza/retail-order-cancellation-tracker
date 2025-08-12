@@ -34,7 +34,7 @@ A powerful Python application that connects to your email accounts and extracts 
 ### Option 1: Download Pre-built Executable (Recommended for End Users)
 
 1. **Download the latest release:**
-   - Go to the [Releases](https://github.com/your-username/target-email-scraper/releases) page
+   - Go to the [Releases](https://github.com/reyurquiza/retail-order-cancellation-tracker/releases/tag/Release) page
    - Download `TargetEmailScraper.exe` from the latest release
    - No Python installation required!
 
