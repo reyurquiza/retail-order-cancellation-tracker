@@ -8,13 +8,13 @@ from datetime import datetime
 import sys
 import queue
 from scraperModule import scrape_target_emails
-from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON
+from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON, OUTPUT_DIR
 
 def smart_trim(text, limit=90):
     if len(text) <= limit:
         return text
-    """Cut to limit and backtrack to last full word"""
-    trimmed = text[:limit].rsplit(" ", 1)[0]
+
+    trimmed = text[:limit].rsplit(" ", 1)[0]  # Cut to limit and backtrack to last full word
     return trimmed + "...\n"
 
 
@@ -42,7 +42,7 @@ class RealTimeLogger:
 class TargetScraperGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Retail Order Email Scraper")
+        self.root.title("Target Email Scraper")
         self.root.geometry("1100x700")
         self.root.minsize(1000, 600)
 
@@ -136,18 +136,22 @@ class TargetScraperGUI:
         ttk.Entry(settings_frame, textvariable=self.days_back_var, width=10).grid(row=0, column=1, sticky='w', padx=10)
 
         # Output Folder (single setting that controls CSV and cache locations)
-        ttk.Label(settings_frame, text="Output folder:").grid(row=1, column=0, sticky='w', pady=5)
+        # TODO: FIX OUTPUT PATH IMPLEMENTATION
+        # ttk.Label(settings_frame, text="Output folder:").grid(row=1, column=0, sticky='w', pady=5)
         self.output_dir_var = tk.StringVar()
         output_frame = ttk.Frame(settings_frame)
         output_frame.grid(row=1, column=1, sticky='ew', padx=10)
-        ttk.Entry(output_frame, textvariable=self.output_dir_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(output_frame, text="Browse", command=self.browse_output_folder).pack(side=tk.RIGHT, padx=(5, 0))
+        #ttk.Entry(output_frame, textvariable=self.output_dir_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        #ttk.Button(output_frame, text="Browse", command=self.browse_output_folder).pack(side=tk.RIGHT, padx=(5, 0))
 
         settings_frame.columnconfigure(1, weight=1)
 
         # Save Configuration button
         save_button = ttk.Button(scrollable_frame, text="Save Configuration", command=self.save_config)
-        save_button.pack(pady=20)
+        save_button.pack(side=tk.BOTTOM, padx=20, pady=10)
+
+        clear_cache_button = ttk.Button(scrollable_frame, text="Clear Cache", command=self.clear_cache)
+        clear_cache_button.pack(side=tk.BOTTOM, padx=20, pady=10)
 
         # Pack canvas and scrollbar
         canvas.pack(side="left", fill="both", expand=True)
@@ -329,6 +333,16 @@ class TargetScraperGUI:
         except Exception as e:
             self.log(f"Error loading config: {e}")
 
+    def clear_cache(self):
+        try:
+            cache_path = OUTPUT_DIR + "/cache/"
+            for filename in os.listdir(cache_path):
+                file_path = os.path.join(cache_path, filename)
+                os.remove(file_path)
+                print(f"'{file_path}' has been deleted.")
+        except OSError as e:
+            print(f"Error deleting {file_path}: {e}")
+
     def save_config(self):
         try:
             # Prepare config data
@@ -346,20 +360,29 @@ class TargetScraperGUI:
             os.makedirs(output_dir, exist_ok=True)
             os.makedirs(os.path.join(output_dir, "cache"), exist_ok=True)
 
-            # Create config content
-            # We save OUTPUT_DIR and derive CSV_PATH and CACHE_JSON from it so the backend gets expected names
+            # Create config content with proper path separators
             config_content = f'''# Multiple email accounts
+import os
 EMAIL_ACCOUNTS = {json.dumps(accounts, indent=4)}
 
 DAYS_BACK = {self.days_back_var.get() or "7"}
-OUTPUT_DIR = "{output_dir}"
-CSV_PATH = OUTPUT_DIR + "/report.csv"
-CACHE_JSON = OUTPUT_DIR + "/cache/emails.json"
-'''
+OUTPUT_DIR = r"{output_dir}"
+CSV_PATH = os.path.join(OUTPUT_DIR, "report.csv")
+CACHE_JSON = os.path.join(OUTPUT_DIR, "cache", "emails.json")
+    '''
 
             # Write to config.py
             with open('config.py', 'w') as f:
                 f.write(config_content)
+
+            # IMPORTANT: Reload the config module so changes take effect
+            import importlib
+            try:
+                import config
+                importlib.reload(config)
+                self.log("Configuration reloaded successfully")
+            except Exception as e:
+                self.log(f"Warning: Could not reload config module: {e}")
 
             messagebox.showinfo("Success", "Configuration saved successfully!")
 

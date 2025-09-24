@@ -54,7 +54,7 @@ A powerful Python application that connects to your email accounts and extracts 
 
 ## Quick Start
 
-### Using the Pre-built Executable (Easiest)
+~~### Using the Pre-built Executable (Easiest)~~ **Currently not working**
 
 1. **Download and run `TargetEmailScraper.exe`**
 2. **Configure your email accounts** (see Configuration section below)
@@ -72,7 +72,7 @@ A powerful Python application that connects to your email accounts and extracts 
    - Click "Add Account" to add email accounts
    - Enter your email, password, and IMAP server
    - Set the number of days to scan back (default: 7)
-   - Choose an output folder for results
+   - ~~Choose an output folder for results~~ **Must be done manually in config.py**
 
 3. **Save configuration and run:**
    - Click "Save Configuration"

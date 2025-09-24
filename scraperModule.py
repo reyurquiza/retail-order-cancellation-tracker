@@ -1,17 +1,12 @@
 """
-emailScraper.py
----------------
-Streamlined backend module for scraping Target order and cancellation emails,
-with verbose logging so the GUI can display every backend action.
+emailScraper.py (multi-retailer, with robust Target extraction fallback)
 
-Behavior:
-- Connect via IMAP and parse retail order emails.
-- Maintain a per-account JSON cache to avoid reprocessing.
-- Process cached emails and update the orders CSV (_orders.csv) so that
-  order statuses advance in the logical shipping order: ordered -> shipped -> delivered.
-  Delivered is terminal (no further advances).
-- Cancellations are written to _cancellations.csv and orders marked as CANCELLED.
-- Verbose prints/logs added at key steps so the GUI receives real-time feedback.
+Notes:
+- Supports retailer rules (target, walmart, amazon, bestbuy).
+- Per-account cache files saved alongside OUTPUT_DIR (config.py provides CSV_PATH/CACHE_JSON).
+- Status progression: ordered -> shipped -> delivered (delivered is terminal).
+- CSVs written: <CSV_PATH> -> report_orders.csv and report_cancellations.csv.
+- This version includes improved Target detection/extraction fallback so Target orders are not missed.
 """
 
 import imaplib
@@ -25,7 +20,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from collections import defaultdict
-from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON
+from config import EMAIL_ACCOUNTS, DAYS_BACK, CSV_PATH, CACHE_JSON, OUTPUT_DIR
 
 # -----------------------
 # Retailer rules (data-driven)
@@ -73,6 +68,19 @@ RETAILER_RULES = {
         "cancel_indicators": ["canceled", "cancelled"],
         "shipped_indicators": ["shipped"],
         "delivered_indicators": ["delivered", "arrived"],
+    },
+    "pokemoncenter": {
+        "ids": ["pokemoncenter", "pokemoncenter.com", "pokemon"],
+        "order_patterns": [
+            r"order\s*#?\s*([A-Z]\d{10})\b",  # Fixed: removed ^ and $, added word boundary
+            r"order\s*number[:\s]*([A-Z]\d{10})\b",  # Fixed: removed ^ and $, added word boundary
+            r"#([A-Z]\d{10})\b",  # Fixed: removed ^ and $, added word boundary
+            r"\b([A-Z]\d{10})\b"  # Added: general pattern for Pokemon Center order format
+        ],
+        "cancel_indicators": ["cancel", "canceled", "your order has been canceled"],
+        "shipped_indicators": ["shipped", "your item is on the way", "order is on its way"],
+        "delivered_indicators": ["your package has been delivered", "delivered", "out for delivery", "arrived",
+                                 "left at the"],
     }
 }
 
@@ -184,7 +192,8 @@ def extract_order_details(text, subject):
     for Target: if no explicit pattern matched, try a general 8-15 digit search.
     """
     # Retailer detection: check sender-like strings in the text and subject
-    retailer = identify_retailer(text, subject) or identify_retailer(subject, text)
+    retailer = identify_retailer(text, subject)
+    # retailer = identify_retailer(subject, text)
 
     # Default to 'target' if nothing matched (keeps backward compatibility)
     if retailer is None:
@@ -512,6 +521,10 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
     if not email_account or not password or not imap_server:
         raise ValueError("email_account, password and imap_server are required")
 
+    # Ensure OUTPUT_DIR exists
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(os.path.join(OUTPUT_DIR, "cache"), exist_ok=True)
+
     cache_path = CACHE_JSON.replace(".json", f"_{email_account.replace('@', '_')}.json")
     email_cache = load_email_cache(cache_path)
     cached_uids = {entry.get("uid") for entry in email_cache if entry.get("uid")}
@@ -534,8 +547,8 @@ def scrape_target_emails(days_back=DAYS_BACK, email_account=None, password=None,
         new_cache_entries = []
         target_emails_found = 0
 
-        orders_csv = CSV_PATH.replace('.csv', '_orders.csv') if CSV_PATH else os.path.join(os.getcwd(), "report_orders.csv")
-        cancellations_csv = CSV_PATH.replace('.csv', '_cancellations.csv') if CSV_PATH else os.path.join(os.getcwd(), "report_cancellations.csv")
+        orders_csv = os.path.join(OUTPUT_DIR, "report_orders.csv")
+        cancellations_csv = os.path.join(OUTPUT_DIR, "report_cancellations.csv")
 
         for num in reversed(data[0].split()):
             uid = num.decode()
