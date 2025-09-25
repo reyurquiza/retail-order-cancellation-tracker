@@ -77,7 +77,7 @@ RETAILER_RULES = {
             r"#([A-Z]\d{10})\b",  # Fixed: removed ^ and $, added word boundary
             r"\b([A-Z]\d{10})\b"  # Added: general pattern for Pokemon Center order format
         ],
-        "cancel_indicators": ["cancel", "canceled", "your order has been canceled"],
+        "cancel_indicators": ["canceled", "your order has been canceled"],
         "shipped_indicators": ["shipped", "your item is on the way", "order is on its way"],
         "delivered_indicators": ["your package has been delivered", "delivered", "out for delivery", "arrived",
                                  "left at the"],
